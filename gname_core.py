@@ -349,11 +349,22 @@ def imap_code(wait=240, min_ts=0):
                         for p in msg.walk():
                             if p.get_content_type() == "text/html":
                                 body_html = p.get_payload(decode=True).decode("utf-8", "ignore")
-                    if "Reason for failure" in body or "incorrect or has expired" in body:
+                    stripped = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", body_html))
+                    subj_raw = msg.get("Subject", "") or ""
+                    if ("Reason for failure" in body or "incorrect or has expired" in body
+                            or "Reason for failure" in stripped
+                            or "removed_failed" in subj_raw or "removed failed" in subj_raw.lower()):
                         continue  # skip aqbh failure-notice mails
-                    mm = (re.search(r"(?:verification code is|code is|code|验证码)\s*[:：]?\s*(\d{4,8})", body, re.I)
-                          or re.search(r"(?:verification code is|code is|code|验证码)\s*[:：]?\s*(\d{4,8})", body_html, re.I)
-                          or re.search(r"\b(\d{6})\b", body) or re.search(r"\b(\d{6})\b", body_html))
+                    # strict first: HTML tags sit between 'code is :' and the number, so
+                    # always search the tag-stripped text; the loose \d{6} fallback must
+                    # never grab the 'Dear user <uid>' number.
+                    mm = (re.search(r"(?:verification code is|code is|验证码)\s*[:：]?\s*(\d{4,8})", body, re.I)
+                          or re.search(r"(?:verification code is|code is|验证码)\s*[:：]?\s*(\d{4,8})", stripped, re.I)
+                          or re.search(r"(?:verification code is|code is|code|验证码)\s*[:：]?\s*(\d{4,8})", body_html, re.I))
+                    if not mm:
+                        cand = re.sub(r"Dear user\s*\d+", "Dear user", stripped)
+                        cand = re.sub(r"Account ID\s*\d+", "Account ID", cand)
+                        mm = re.search(r"\b(\d{6})\b", cand)
                     m.logout()
                     if mm:
                         return mm.group(1)

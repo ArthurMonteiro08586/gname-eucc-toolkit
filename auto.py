@@ -127,7 +127,8 @@ def main():
         elif args.mail == "dns":
             ip = os.environ.get("DNS_A_IP", "")
             a_args = ["--a", "mail=" + ip] if ip else []
-            run("setup_dns.py", dom, *a_args, "--mx", "@=mail." + dom + ":5")
+            t_args = ["--txt", "@=v=spf1 ip4:" + ip + " ~all"] if ip else []
+            run("setup_dns.py", dom, *a_args, "--mx", "@=mail." + dom + ":5", *t_args)
             st[dom]["mail"] = "self-hosted-mx"
         else:
             st[dom]["mail"] = st[dom].get("mail", "pending")

@@ -12,11 +12,21 @@ from gname_core import (BASE, COOKIES_F, SITE, UA, log, mk_context,
                         save_cookies, human_drag, vl_solve_image)
 
 def pick_creds():
-    idx = int(sys.argv[1]) if len(sys.argv) > 1 else None
-    if idx is not None:
+    # argv[1] = bank index OR uid; env GNAME_UID also selects by uid
+    sel = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("GNAME_UID", "")
+    if sel:
         bank_f = os.path.join(BASE, "gname_accounts.jsonl")
         bank = [json.loads(l) for l in open(bank_f, encoding="utf-8") if l.strip()]
-        acc = bank[idx]
+        acc = None
+        if sel.isdigit():
+            by_uid = [a for a in bank if str(a.get("uid")) == sel]
+            if by_uid:
+                acc = by_uid[0]
+            else:
+                acc = bank[int(sel)]
+        if acc is None:
+            raise SystemExit("account not found: " + sel)
+        log("BANK PICK: uid", acc.get("uid"), acc.get("email"))
         return acc["email"], acc["password"]
     e, p = os.environ.get("GNAME_EMAIL", ""), os.environ.get("GNAME_PASSWORD", "")
     if not (e and p):
@@ -71,6 +81,18 @@ def main():
         log("BODY:", body)
         ok = "/user" in page.url or "ID:" in page.locator("body").inner_text()[:3000]
         save_cookies(ctx)
+        # identity proof: list domains of the logged-in account
+        if ok:
+            try:
+                from gname_core import inpost_json, csrf
+                r = inpost_json(page, "/user_ym/get_ym_list",
+                                {"page": 1, "limit": 50, "csrf_token": csrf(page)}, "idcheck")
+                data = (r or {}).get("data") or {}
+                lst = data.get("data") if isinstance(data, dict) else data
+                doms = [x.get("ym") for x in (lst or [])]
+                log("ACCOUNT DOMAINS:", doms if doms else "(none)")
+            except Exception as e:
+                log("ACCOUNT DOMAINS: err", str(e)[:80])
         browser.close()
         log("LOGIN:", "OK" if ok else "CHECK-MANUALLY")
         return 0 if ok else 1

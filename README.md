@@ -17,6 +17,8 @@ python auto.py --domains 2 --mail cf --serve
 | DNS records | `setup_dns.py` | A / MX / TXT / CNAME + NS change via in-page `/user_ym/jx_edit`; auto-handles operation-protection (czyz): channel enable `[1,4]`, challenge → email code → `aqbh_check`, tokenless `-101` session unlock → retry, and slider-gated email send (`code -105001` → site `slide_yz` popup → one-time code → `re_yzm` param). Wrong codes latch a ~1h block server-side — never brute-force codes |
 | Self-hosted catch-all | `mail_catcher/catcher.py` | **RECOMMENDED**: tiny aiosmtpd MX server on your VPS (:25) — accepts `*@yourdomains`, stores `.eml`, relays copy to Gmail (SMTP_SSL 465). Works where free relays denylist the domain (ForwardEmail denylists all of `eu.cc`) |
 | DNS record cleanup | `dns_clean.py` | `POST /user_ym/get_jx_list` → `/user_ym/jx_del`: purge stale records (`--match forwardemail`, `--ip 1.2.3.4`) |
+| Outbound SMTP | `mail_catcher/submit.py` | Send mail **as your domain**: authenticated submission on VPS `:587` (LOGIN + STARTTLS), direct-MX delivery with automatic Gmail-relay fallback when outbound :25 is blocked. SPF TXT set automatically by `auto.py --mail dns` |
+| OTP mailbox API | `mail_catcher/otp_api.py` | stdlib HTTP `:2525` over the catcher's mail store: `/next` issues a fresh mailbox, `/latest?address=..&wait=60` long-polls the OTP and parses the code, `/acquire`, `/list`, `/health` — register-then-read-OTP without IMAP |
 | ForwardEmail mail | *(via `auto.py --mail fwd`)* | MX `mx1/mx2.forwardemail.net` + TXT `forward-email=DEST` through gname DNS. NOTE: ForwardEmail **denylists `eu.cc`** (5.1.1 at SMTP) — use `mail_catcher` for these domains |
 | Cloudflare mail | `cf_mail.py` | Pure API: create zone → enable Email Routing → destination address → **catch-all rule** (every `*@yourdomain` forwards to your Gmail). MX/SPF auto-created by CF |
 | Orchestration | `auto.py` | login → claim N → mail setup → NS switch → `data/status.json` |
@@ -46,6 +48,7 @@ export DNS_A_IP=YOUR_VPS_IP
 python auto.py --domains 3 --mail dns    # A mail->IP + MX @->mail.domain (prio 5)
 ```
 Proven chain: external sender → public MX `mail.<domain>.eu.cc` → VPS :25 catcher → `.eml` stored + relayed to Gmail (`[catch otp-...@domain]` subject, verification code in body — `imap_code`/dashboard read it). Works for 3/3 live domains.
+Proven outbound chain: client → VPS `:587` (auth LOGIN, TLS) → Gmail relay fallback → recipient inbox with `From: you@yourdomain` (marker test found in INBOX). Proven OTP loop: `/next` → mail to issued address → `/latest?wait=90` → `CODE VALID: True` (see `mail_catcher/README.md`).
 Purge stale records anytime: `python dns_clean.py <domain> --match forwardemail` / `--ip OLD_IP`.
 
 ### ForwardEmail (non-denylisted domains only)
