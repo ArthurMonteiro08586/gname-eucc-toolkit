@@ -1,80 +1,105 @@
 # gname-eucc-toolkit
 
-Free `.eu.cc` domain farm on [gname.com](https://www.gname.com/) + full mail stack: Cloudflare DNS, catch-all Email Routing, corporate mailboxes, OTP automation for autoregs.
-
-**What you get:**
-- $0 domains: every gname account receives **3 full-discount .eu.cc vouchers** (registration AND renewal at $0)
-- Custom slider captcha `GnSliderVerify` fully reversed (not supported by any solver service)
-- One domain = unlimited mailboxes via Cloudflare Email Routing catch-all
-- Corporate mail on your domain via Zoho Forever Free
-
-## Files
-
-| File | Purpose |
-|---|---|
-| `gname_reg.py` | Autoreg: Playwright headless Chromium, solves the embedded + popup sliders, reads the email code via IMAP, logs into the dashboard. ~90s/account |
-| `domain_claim.py` | Claims a free .eu.cc with a voucher, appends result to `data/eucc_domains.jsonl` |
-| `mfa_bind.py` | Binds TOTP MFA on the account (keeps the farm accounts recoverable) |
-| `gsv_deob_v2.py`, `gsv_deob2.py` | Deobfuscators for the site's slider JS (7574 transitive aliases removed) |
-| `gsv_deob2.js` | The readable deobfuscated slider code |
-| `gsv_keynames.json`, `gsv_strings.json` | String/key maps used by the deobfuscators |
-
-## Environment (never hardcode credentials)
+**Full-auto free-domain + mail pipeline.** One command: claim free `.eu.cc` domains on [gname.com](https://www.gname.com/) (voucher = $0.00), set DNS, wire mail (Cloudflare catch-all or self-hosted MX), watch everything in a dashboard.
 
 ```
-GM_EMAIL=yourbox@gmail.com          # Gmail that receives dot-variant mail
-GM_APPPW=********                   # Gmail app password (IMAP)
-GNAME_PW_PREFIX=Any                 # prefix for generated account passwords
-TONLINE_POOL=data/tonline_pool.txt  # optional: email:pass pool (used when no arg given)
-GNAME_HOME=./data                   # state dir (cookies, accounts, domains jsonl)
+python auto.py --domains 2 --mail cf --serve
 ```
 
-Run:
+## What's automated
+
+| Stage | Script | How |
+|---|---|---|
+| Account registration | `gname_reg.py` | Playwright headless, solves the custom `GnSliderVerify` slider (reversed, see below), email code via IMAP |
+| Login | `login.py` | Password tab + login slider + image captcha via any OpenAI-compatible vision model |
+| Domain claim | `claim_domain.py` | Promo `POST /hd_eucc/freereg` claims 3 full-discount `.eu.cc` vouchers → Search → Add to Cart → cart select → Submit → Pay (contact form + czyz unlock + modal chain) → voucher auto-applied, **$0.00** hold; appends `data/eucc_domains.jsonl` |
+| Live domain list | `list_domains.py` | Real dashboard API `POST /user_ym/get_ym_list` — domain, expire, coupon used, status |
+| DNS records | `setup_dns.py` | A / MX / TXT / CNAME + NS change via in-page `/user_ym/jx_edit`; auto-handles operation-protection (czyz): channel enable `[1,4]`, challenge → email code → `aqbh_check`, tokenless `-101` session unlock → retry, and slider-gated email send (`code -105001` → site `slide_yz` popup → one-time code → `re_yzm` param). Wrong codes latch a ~1h block server-side — never brute-force codes |
+| Self-hosted catch-all | `mail_catcher/catcher.py` | **RECOMMENDED**: tiny aiosmtpd MX server on your VPS (:25) — accepts `*@yourdomains`, stores `.eml`, relays copy to Gmail (SMTP_SSL 465). Works where free relays denylist the domain (ForwardEmail denylists all of `eu.cc`) |
+| DNS record cleanup | `dns_clean.py` | `POST /user_ym/get_jx_list` → `/user_ym/jx_del`: purge stale records (`--match forwardemail`, `--ip 1.2.3.4`) |
+| ForwardEmail mail | *(via `auto.py --mail fwd`)* | MX `mx1/mx2.forwardemail.net` + TXT `forward-email=DEST` through gname DNS. NOTE: ForwardEmail **denylists `eu.cc`** (5.1.1 at SMTP) — use `mail_catcher` for these domains |
+| Cloudflare mail | `cf_mail.py` | Pure API: create zone → enable Email Routing → destination address → **catch-all rule** (every `*@yourdomain` forwards to your Gmail). MX/SPF auto-created by CF |
+| Orchestration | `auto.py` | login → claim N → mail setup → NS switch → `data/status.json` |
+| Dashboard | `dashboard.py` | stdlib HTTP (:8570): domains, pipeline status, live OTP inbox (codes parsed from subjects) |
+| MFA bind | `mfa_bind.py` | TOTP on the account (keeps farm accounts recoverable) |
+| Captcha RE | `gsv_deob*.py`, `gsv_deob2.js` | Deobfuscators for the site slider JS (7574 transitive aliases removed) |
+
+## Quickstart
 
 ```
 pip install playwright && playwright install chromium
-python gname_reg.py your.name@gmail.com   # or omit arg to pull from TONLINE_POOL
-python domain_claim.py
-python mfa_bind.py
+
+export GNAME_EMAIL=you@gmail.com          # or use data/gname_accounts.jsonl bank
+export GNAME_PASSWORD=***
+export GM_EMAIL=you@gmail.com             # mailbox that receives codes/catch-all
+export GM_APPPW=********                  # Gmail app password (IMAP)
+
+python login.py                # or gname_reg.py to register a fresh account
+python auto.py --domains 3 --prefix myname
+python dashboard.py            # http://127.0.0.1:8570
+```
+
+### Instant catch-all mail — self-hosted MX (RECOMMENDED, proven E2E)
+Deploy `mail_catcher/catcher.py` on any VPS with inbound :25 (see `mail_catcher/README.md`), then:
+```
+export DNS_A_IP=YOUR_VPS_IP
+python auto.py --domains 3 --mail dns    # A mail->IP + MX @->mail.domain (prio 5)
+```
+Proven chain: external sender → public MX `mail.<domain>.eu.cc` → VPS :25 catcher → `.eml` stored + relayed to Gmail (`[catch otp-...@domain]` subject, verification code in body — `imap_code`/dashboard read it). Works for 3/3 live domains.
+Purge stale records anytime: `python dns_clean.py <domain> --match forwardemail` / `--ip OLD_IP`.
+
+### ForwardEmail (non-denylisted domains only)
+```
+export MAIL_DEST=you@gmail.com     # default: GM_EMAIL
+python auto.py --domains 3 --mail fwd
+```
+Sets MX (`mx1/mx2.forwardemail.net`) + TXT (`forward-email=you@gmail.com`). **`eu.cc` is denylisted by ForwardEmail free tier** (SMTP 5.1.1 "Recipient domain is denylisted") — use the self-hosted catcher above for these zones.
+
+### Cloudflare catch-all mail (optional)
+```
+export CF_API_TOKEN=***       # Zone:Edit + Email Routing:Edit
+export CF_ACCOUNT_ID=...
+export CF_DEST_EMAIL=you@gmail.com
+python auto.py --domains 1 --mail cf
+```
+`eu.cc` is on the Public Suffix List → Cloudflare accepts `yourname.eu.cc` as a Free-plan zone. CF returns 2 nameservers; the pipeline sets them at gname automatically (`setup_dns.py --ns`). Confirm the destination address from the CF email — after that **every address on your domain is live** and OTP codes land in your Gmail (visible in the dashboard inbox).
+
+### Self-hosted MX (no Cloudflare)
+```
+export DNS_A_IP=1.2.3.4
+python auto.py --domains 1 --mail dns   # A mail->IP + MX @->mail.domain
+```
+
+### Corporate mailboxes (Zoho Forever Free)
+5 users × 5GB on your domain, free: add the domain in Zoho Mail → verify with a TXT record (`setup_dns.py DOM --txt "@=zoho-verification=..."`) → point MX to Zoho (`--mx @=mx.zoho.com:10 --mx @=mx2.zoho.com:20`) → SPF/DKIM TXT via the same script. Free tier has no IMAP (web/mobile only) — keep the CF catch-all → Gmail channel for OTP automation.
+
+## Env reference
+
+```
+GNAME_HOME        state dir (default ./data)
+GNAME_EMAIL / GNAME_PASSWORD   login creds (alternative: data/gname_accounts.jsonl)
+GM_EMAIL / GM_APPPW    Gmail IMAP for codes + catch-all destination
+MAIL_DEST         catch-all forward destination for --mail fwd (default GM_EMAIL)
+VL_BASE / VL_MODEL / VL_KEY   vision endpoint for image captchas (default :16432 qwen3-vl-plus)
+CF_API_TOKEN / CF_ACCOUNT_ID / CF_DEST_EMAIL   Cloudflare
+DNS_A_IP          mail server IP for --mail dns
+CONTACT_*         registrant contact template (first checkout)
+GNAME_DASH_PORT   dashboard port (default 8570)
 ```
 
 ## How the slider bypass works
 
-1. Site draws a 400px track but the client clamps the required distance to `width - barWidth` from a **config value of 360px**. Undershooting by even 2px triggers a silent reset with zero POST requests (that's why naive solvers "see nothing").
-2. Payload `details` is AES-CBC encrypted: `{m: trajectory points (hex), st, et, f: GnClientJS fingerprint, d, t, t2}` → response token is 40 hex chars, valid 300s.
-3. Server gates: duration 10ms–30s, 3–1000 points, must "reach" the clamped distance.
-4. Solution: drag with **+40px overshoot** and 4 saturate wiggles before mouseup. Both sliders: embedded (`lx=register`, field `re_yzm`) and popup (`lx=reg`, `#pop-txyz`) before `send_email`.
+1. The site draws a 400px track but the client clamps the required distance to `width - barWidth` from a **config value of 360px**. Undershooting by 2px = silent reset with zero POSTs (why generic solvers "see nothing").
+2. Payload `details` is AES-CBC: `{m: trajectory-hex, st, et, f: GnClientJS fingerprint, ...}` → token 40 hex / 300s.
+3. Server gates: duration 10ms–30s, 3–1000 points, must reach the clamped distance.
+4. Fix: **+40px overshoot** and saturate wiggles before mouseup (`human_drag` in `gname_core.py`). Both variants covered: embedded (`re_yzm`) and popup (`#pop-txyz`).
 
-## Full setup: domain → Cloudflare → mail
+## Facts
 
-### 1. Get the domain
-Register (autoreg above) → dashboard → claim a free .eu.cc with a voucher (`domain_claim.py`). Registry limits: no 2–3 letter names, no brand terms; everything else passes. 3 accounts from one Gmail (dot-variants don't collide) = **9 free domains**.
-
-### 2. Cloudflare zone + DNS
-- `eu.cc` is on the **Public Suffix List** (line 16098), so Cloudflare accepts `yourname.eu.cc` as a zone on the Free plan.
-- Cloudflare → Add Site → your domain → Free plan → copy the two assigned NS.
-- gname → Domain Management → **Modify DNS** → replace NS with Cloudflare's (same via their API `/api/domain/dns`).
-- Propagation: minutes to a few hours. Cloudflare now serves your DNS (A/AAAA/MX/TXT).
-
-### 3. Catch-all mail (OTP engine)
-- Cloudflare → **Email Routing** → Enable (free). CF auto-creates the MX + SPF TXT records.
-- Add your Gmail as destination address, confirm it.
-- Turn on **Catch-all address** → every mailbox `*@yourdomain.eu.cc` now lands in your Gmail.
-- Read codes over Gmail IMAP with an app password — that's what `gname_reg.py`'s `imap_code()` pattern does. Unlimited unique emails, no temp-mail services, no plus-alias canonicalization problems.
-
-### 4. Corporate mail on the domain (real mailboxes)
-- **Zoho Mail Forever Free**: 5 users, 5GB each, single custom domain, web + mobile apps. Free, but **IMAP/POP/ActiveSync are NOT included** on the free tier (web/app access only).
-- Setup: Zoho Mail → add domain → verify with a TXT record in Cloudflare DNS → point MX to Zoho's records (replace CF Email Routing MX for those users, or keep catch-all on a subdomain) → add SPF/DKIM TXT in Cloudflare.
-- Result: `you@yourdomain.eu.cc` corporate mailbox for forms, support, banking-style signups; catch-all on the same domain feeds the OTP automation.
-
-### Combined topology (what we run)
-```
-yourname.eu.cc  (gname, $0, renewed $0)
-   └── NS → Cloudflare (free zone, PSL-backed)
-        ├── Email Routing catch-all → Gmail → IMAP → autoreg OTP
-        ├── A/AAAA records → any host/VPS
-        └── MX → Zoho Forever Free (5 corporate mailboxes, web/app)
-```
+- 3 full-discount `.eu.cc` vouchers per account; registration AND renewal $0
+- Registry limits: no 2–3 letter names, no brand terms
+- Dot-variant Gmails (`y.ourname@gmail.com`) register as separate accounts → 3 accounts = 9 free domains from one inbox
+- ~90s per account, ~2min per domain claim
 
 ## Disclaimer
 
