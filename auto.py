@@ -126,6 +126,10 @@ def main():
                 st[dom]["ns_set"] = ns
         elif args.mail == "dns":
             ip = os.environ.get("DNS_A_IP", "")
+            if os.environ.get("GNAME_UID"):
+                # ensure operation protection is SET (MFA + czyz[1,4]);
+                # without it jx_edit writes fail with -101 on fresh accounts
+                st[dom]["mfa_bind_rc"] = run("mfa_bind.py", "--uid", os.environ["GNAME_UID"])
             a_args = ["--a", "mail=" + ip] if ip else []
             t_args = ["--txt", "@=v=spf1 ip4:" + ip + " ~all"] if ip else []
             run("setup_dns.py", dom, *a_args, "--mx", "@=mail." + dom + ":5", *t_args)

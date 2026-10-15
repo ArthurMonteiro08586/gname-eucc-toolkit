@@ -23,7 +23,7 @@ python auto.py --domains 2 --mail cf --serve
 | Cloudflare mail | `cf_mail.py` | Pure API: create zone → enable Email Routing → destination address → **catch-all rule** (every `*@yourdomain` forwards to your Gmail). MX/SPF auto-created by CF |
 | Orchestration | `auto.py` | login → claim N → mail setup → NS switch → `data/status.json` |
 | Dashboard | `dashboard.py` | stdlib HTTP (:8570): domains, pipeline status, live OTP inbox (codes parsed from subjects) |
-| MFA bind | `mfa_bind.py` | TOTP on the account (keeps farm accounts recoverable) |
+| MFA bind + protection | `mfa_bind.py` | Proven 2-state fix: `-100 remove protection` → aqbh email unlock; `-101 set protection` → MFA bind (`set_aqlb` secret+totp) + `set_czyz [1,4]`. Run BEFORE `setup_dns.py` on fresh accounts |
 | Captcha RE | `gsv_deob*.py`, `gsv_deob2.js` | Deobfuscators for the site slider JS (7574 transitive aliases removed) |
 
 ## Quickstart
@@ -47,7 +47,7 @@ Deploy `mail_catcher/catcher.py` on any VPS with inbound :25 (see `mail_catcher/
 export DNS_A_IP=YOUR_VPS_IP
 python auto.py --domains 3 --mail dns    # A mail->IP + MX @->mail.domain (prio 5)
 ```
-Proven chain: external sender → public MX `mail.<domain>.eu.cc` → VPS :25 catcher → `.eml` stored + relayed to Gmail (`[catch otp-...@domain]` subject, verification code in body — `imap_code`/dashboard read it). Works for 3/3 live domains.
+Proven chain: external sender → public MX `mail.<domain>.eu.cc` → VPS :25 catcher → `.eml` stored + relayed to Gmail (`[catch otp-...@domain]` subject, verification code in body — `imap_code`/dashboard read it). Works for **4/4 live domains** (incl. `reformvk21.eu.cc` via `mfa_bind.py` → `setup_dns.py`: A/MX/SPF `code:1`, public DNS confirmed via Google resolver, external SMTP → catcher → Gmail FOUND).
 Proven outbound chain: client → VPS `:587` (auth LOGIN, TLS) → Gmail relay fallback → recipient inbox with `From: you@yourdomain` (marker test found in INBOX). Proven OTP loop: `/next` → mail to issued address → `/latest?wait=90` → `CODE VALID: True` (see `mail_catcher/README.md`).
 Purge stale records anytime: `python dns_clean.py <domain> --match forwardemail` / `--ip OLD_IP`.
 

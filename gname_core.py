@@ -214,6 +214,7 @@ def aqbh_session_unlock(page, email=None):
     tok = csrf(page)
     email = email or os.environ.get("GM_EMAIL", "")
     t_send = time.time() - 30
+    t_sent_ok = t_send
     sent = False
     for attempt in range(4):
         r = inpost_json(page, "/request/send_email", {"email": email, "lx": "czyz", "csrf_token": tok}, "aq_snd%d" % attempt)
@@ -231,6 +232,7 @@ def aqbh_session_unlock(page, email=None):
             log("AQBH SEND_EMAIL retry:", str(r)[:150])
         if isinstance(r, dict) and r.get("code") == 1:
             sent = True
+            t_sent_ok = time.time()  # freshness anchor AFTER cooldown/slider waits
             break
         msg = str((r or {}).get("msg", "")) if isinstance(r, dict) else ""
         m2 = re.search(r"after\s+(\d+)\s+seconds", msg)
@@ -242,19 +244,34 @@ def aqbh_session_unlock(page, email=None):
         return False
     if not sent:
         return False
-    code = imap_code(wait=300, min_ts=t_send)
-    log("AQBH code:", code)
-    if not code:
-        return False
-    r = inpost_json(page, "/user_zh/aqbh_check", {"csrf_token": tok, "token": "", "eyzm": code}, "aq_sess")
-    log("AQBH_CHECK session:", str(r)[:250])
-    s = str(r)
-    ok = '"code":1' in s or '"code":"1"' in s
+    min_ts = t_sent_ok - 20
+    ok = False
+    for chk in range(3):
+        code = imap_code(wait=240, min_ts=min_ts)
+        log("AQBH code:", code)
+        if not code:
+            break
+        r = inpost_json(page, "/user_zh/aqbh_check", {"csrf_token": tok, "token": "", "eyzm": code}, "aq_sess%d" % chk)
+        log("AQBH_CHECK session:", str(r)[:250])
+        s = str(r)
+        if isinstance(r, dict):
+            ok = str(r.get("code")) == "1"
+        else:
+            ok = '"code":1' in s or '"code":"1"' in s
+        if ok:
+            break
+        if "tried wrong" in s or "restricted for 1 hour" in s:
+            _AQBH_BLOCKED = True
+            log("AQBH LOCKOUT: wrong-code limit hit, blocked ~1h - stop attempts")
+            break
+        if "incorrect or has expired" in s:
+            # mail lag: the code we read may predate the newest send — re-read fresh
+            min_ts = time.time() - 5
+            time.sleep(12)
+            continue
+        break
     if ok:
         _AQBH_OK = True
-    elif "tried wrong" in s or "restricted for 1 hour" in s:
-        _AQBH_BLOCKED = True
-        log("AQBH LOCKOUT: wrong-code limit hit, blocked ~1h - stop attempts")
     return ok
 
 
