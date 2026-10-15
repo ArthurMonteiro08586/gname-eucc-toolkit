@@ -349,6 +349,13 @@ def imap_code(wait=240, min_ts=0):
                         for p in msg.walk():
                             if p.get_content_type() == "text/html":
                                 body_html = p.get_payload(decode=True).decode("utf-8", "ignore")
+                    if not body_html:
+                        # single-part mail: gname sends code mails as ONE text/html part
+                        # (is_multipart()==False) — then `body` holds raw HTML and the
+                        # tag-stripped search below would run on nothing.
+                        if msg.get_content_type() == "text/html" or body.lstrip()[:1] == "<":
+                            body_html = body
+                            body = ""
                     stripped = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", body_html))
                     subj_raw = msg.get("Subject", "") or ""
                     if ("Reason for failure" in body or "incorrect or has expired" in body
@@ -365,10 +372,13 @@ def imap_code(wait=240, min_ts=0):
                         cand = re.sub(r"Dear user\s*\d+", "Dear user", stripped)
                         cand = re.sub(r"Account ID\s*\d+", "Account ID", cand)
                         mm = re.search(r"\b(\d{6})\b", cand)
-                    m.logout()
                     if mm:
-                        return mm.group(1)
-            m.logout()
+                        code = mm.group(1)
+                        try: m.logout()
+                        except Exception: pass
+                        return code
+            try: m.logout()
+            except Exception: pass
         except Exception as e:
             log("imap err:", e)
         time.sleep(6)
